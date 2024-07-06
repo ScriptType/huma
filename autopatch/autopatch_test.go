@@ -65,7 +65,8 @@ func TestPatch(t *testing.T) {
 		Errors:      []int{404},
 	}, func(ctx context.Context, input *struct {
 		ThingIDParam
-	}) (*GetThingResponse, error) {
+	},
+	) (*GetThingResponse, error) {
 		thing := db[input.ThingID]
 		if thing == nil {
 			return nil, huma.Error404NotFound("Not found")
@@ -86,7 +87,8 @@ func TestPatch(t *testing.T) {
 		ThingIDParam
 		Body    ThingModel
 		IfMatch []string `header:"If-Match" doc:"Succeeds if the server's resource matches one of the passed values."`
-	}) (*GetThingResponse, error) {
+	},
+	) (*GetThingResponse, error) {
 		if len(input.IfMatch) > 0 {
 			found := false
 			if existing := db[input.ThingID]; existing != nil {
@@ -234,7 +236,8 @@ func TestPatchPutNoBody(t *testing.T) {
 	}, func(ctx context.Context, input *struct {
 		ThingIDParam
 		// Note: no body!
-	}) (*struct{}, error) {
+	},
+	) (*struct{}, error) {
 		return nil, nil
 	})
 
@@ -245,7 +248,8 @@ func TestPatchPutNoBody(t *testing.T) {
 	}, func(ctx context.Context, input *struct {
 		ThingIDParam
 		// Note: no body!
-	}) (*struct{}, error) {
+	},
+	) (*struct{}, error) {
 		return nil, nil
 	})
 
@@ -271,7 +275,8 @@ func TestExplicitDisable(t *testing.T) {
 		},
 	}, func(ctx context.Context, input *struct {
 		ThingIDParam
-	}) (*struct{ Body struct{} }, error) {
+	},
+	) (*struct{ Body struct{} }, error) {
 		return nil, nil
 	})
 
@@ -284,7 +289,8 @@ func TestExplicitDisable(t *testing.T) {
 		ThingIDParam
 		Body    ThingModel
 		IfMatch []string `header:"If-Match" doc:"Succeeds if the server's resource matches one of the passed values."`
-	}) (*struct{ Body struct{} }, error) {
+	},
+	) (*struct{ Body struct{} }, error) {
 		return nil, nil
 	})
 
@@ -308,7 +314,8 @@ func TestDeprecatedPatch(t *testing.T) {
 		ThingIDParam
 	}) (*struct {
 		Body *ThingModel
-	}, error) {
+	}, error,
+	) {
 		return &struct{ Body *ThingModel }{&ThingModel{}}, nil
 	})
 
@@ -322,11 +329,82 @@ func TestDeprecatedPatch(t *testing.T) {
 		Body ThingModel
 	}) (*struct {
 		Body *ThingModel
-	}, error) {
+	}, error,
+	) {
 		return &struct{ Body *ThingModel }{&ThingModel{}}, nil
 	})
 
 	AutoPatch(api)
 
 	assert.True(t, api.OpenAPI().Paths["/things/{thing-id}"].Patch.Deprecated)
+}
+
+func TestAutoPatchOptionalSchema(t *testing.T) {
+	_, api := humatest.New(t)
+
+	type TestModel struct {
+		ID       string  `json:"id"`
+		Name     string  `json:"name"`
+		Age      int     `json:"age"`
+		Optional *string `json:"optional,omitempty"`
+	}
+
+	huma.Register(api, huma.Operation{
+		OperationID: "get-test",
+		Method:      http.MethodGet,
+		Path:        "/test/{id}",
+	}, func(ctx context.Context, input *struct {
+		ID string `path:"id"`
+	}) (*struct {
+		Body *TestModel
+	}, error,
+	) {
+		return &struct{ Body *TestModel }{&TestModel{}}, nil
+	})
+
+	huma.Register(api, huma.Operation{
+		OperationID: "put-test",
+		Method:      http.MethodPut,
+		Path:        "/test/{id}",
+	}, func(ctx context.Context, input *struct {
+		ID   string    `path:"id"`
+		Body TestModel `json:"body"`
+	}) (*struct {
+		Body *TestModel
+	}, error,
+	) {
+		return &struct{ Body *TestModel }{&TestModel{}}, nil
+	})
+
+	AutoPatch(api)
+
+	// Check if PATCH operation was generated
+	patchOp := api.OpenAPI().Paths["/test/{id}"].Patch
+	assert.NotNil(t, patchOp, "PATCH operation should be generated")
+
+	// Check if the generated PATCH operation has the correct schema
+	patchSchema := patchOp.RequestBody.Content["application/merge-patch+json"].Schema
+	assert.NotNil(t, patchSchema, "PATCH schema should be present")
+
+	// Verify that all fields in the schema are optional
+	assert.Empty(t, patchSchema.Required, "All fields should be optional in PATCH schema")
+
+	// Check if all fields from the original schema are present
+	properties := patchSchema.Properties
+	assert.Contains(t, properties, "id")
+	assert.Contains(t, properties, "name")
+	assert.Contains(t, properties, "age")
+	assert.Contains(t, properties, "optional")
+
+	// Verify that all fields are nullable
+	for _, prop := range properties {
+		assert.True(t, prop.Nullable, "All fields should be nullable in PATCH schema")
+	}
+
+	// Test the generated PATCH operation
+	w := api.Patch("/test/123",
+		"Content-Type: application/merge-patch+json",
+		strings.NewReader(`{"name": "New Name", "age": 30}`),
+	)
+	assert.Equal(t, http.StatusOK, w.Code, w.Body.String())
 }
